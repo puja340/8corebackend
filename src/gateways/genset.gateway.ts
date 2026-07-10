@@ -66,8 +66,11 @@ export class GensetGateway implements OnGatewayConnection, OnGatewayDisconnect {
   afterInit() {
     this.server.on('connection', (client: WebSocket) => {
       client.on('message', async (message: string | Buffer) => {
+        console.log("Received:", message.toString());
         try {
           const msg = JSON.parse(message.toString());
+                  console.log("Message Type:", msg.type);   // <-- Add here
+
 
           // === MANUAL TOGGLE ===
           if (msg.type === 'set_genset_status') {
@@ -135,6 +138,8 @@ export class GensetGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private broadcastGensetData() {
     const fullData = this.currentGensetData;
+
+  console.log("Broadcasting:", fullData);
     this.server.clients.forEach((client) => {
       const info = this.clientViews.get(client);
       if (!info?.view || client.readyState !== WebSocket.OPEN) return;
