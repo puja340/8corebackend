@@ -32,11 +32,17 @@ export class GensetGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ←←← NEW: Maintain latest full state
   private currentGensetData: any = {
     genset1: null, genset2: null, genset3: null, genset4: null,
-    genset5: null, genset6: null, genset7: null, genset8: null,
+    genset5: null, genset6: null, genset7: null, genset8: null, capacitor: null, 
   };
 
-  private kwBuffers: { [key: number]: number[] } = { 1: [], 2: [], /* ... */ 8: [] };
-  private lastSaveTime = Date.now();
+private kwBuffers: { [key: number]: number[] } = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [] };
+private kvaBuffers: { [key: number]: number[] } = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [] };
+private voltageBuffers: { [key: number]: number[] } = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [] };
+private essActivePowerBuffer: number[] = [];
+private essApparentPowerBuffer: number[] = [];
+
+private lastSaveTime = Date.now();
+  // private lastSaveTime = Date.now();
 
   handleConnection(client: WebSocket) {
     console.log('→ Client connected');
@@ -66,16 +72,18 @@ export class GensetGateway implements OnGatewayConnection, OnGatewayDisconnect {
   afterInit() {
     this.server.on('connection', (client: WebSocket) => {
       client.on('message', async (message: string | Buffer) => {
-        console.log("Received:", message.toString());
+        // console.log("Received:", message.toString());
         try {
           const msg = JSON.parse(message.toString());
-                  console.log("Message Type:", msg.type);   // <-- Add here
+                  // console.log("Message Type:", msg.type);   // <-- Add here
 
 
           // === MANUAL TOGGLE ===
           if (msg.type === 'set_genset_status') {
+              console.log("Toggle received from React:", msg);
+
             // ... (your existing toggle logic - unchanged)
-            await this.gensetService.updateStatus({ gensetKey: msg.genset, status: msg.status });
+        await this.gensetService.updateGensetAllStatus(msg.status);
 
             this.server.clients.forEach((c) => {
               if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(msg));
@@ -86,40 +94,59 @@ export class GensetGateway implements OnGatewayConnection, OnGatewayDisconnect {
           }
 
           // === INDIVIDUAL GENSET UPDATE (New dhruv.py format) ===
-          let updated = false;
+      // === INDIVIDUAL GENSET UPDATE ===
+let updated = false;
 
-          for (let i = 1; i <= 8; i++) {
-            const key = `genset${i}`;
-            if (msg[key]) {
-              this.currentGensetData[key] = msg[key];
-              updated = true;
+// Inside the message handler (afterInit → client.on('message'))
+for (let i = 1; i <= 8; i++) {
+  const key = `genset${i}`;
+  if (msg[key]) {
+    this.currentGensetData[key] = msg[key];
+    updated = true;
 
-              // Buffer KW for DB saving
-              const kw = Number(msg[key].kw || msg[key].power || 0);
-              if (!this.kwBuffers[i]) this.kwBuffers[i] = [];
-              this.kwBuffers[i].push(kw);
-            }
-          }
+    const gensetData = msg[key];
 
-          if (updated) {
-            const now = Date.now();
+    // Buffer values
+    const kw = Number(gensetData.kw || gensetData.power || 0);
+    const kva = Number(gensetData.kva || 0);
+    const voltage = Number(gensetData.voltage || 0);
 
-            // Save to DB every 60s (same logic)
-            if (now - this.lastSaveTime >= 60000) {
-              for (let i = 1; i <= 8; i++) {
-                const buffer = this.kwBuffers[i];
-                if (buffer?.length > 0) {
-                  const randomKw = buffer[Math.floor(Math.random() * buffer.length)];
-                  await this.gensetService.saveKwReading(i, randomKw);
-                  buffer.length = 0;
-                }
-              }
-              this.lastSaveTime = now;
-            }
+    this.kwBuffers[i] = this.kwBuffers[i] || [];
+    this.kvaBuffers[i] = this.kvaBuffers[i] || [];
+    this.voltageBuffers[i] = this.voltageBuffers[i] || [];
 
-            // Broadcast full current state
-            this.broadcastGensetData();
-          }
+    this.kwBuffers[i].push(kw);
+    this.kvaBuffers[i].push(kva);
+    this.voltageBuffers[i].push(voltage);
+  }
+}
+// === CAPACITOR UPDATE ===
+if (msg.capacitor) {
+  this.currentGensetData.capacitor = msg.capacitor;
+  updated = true;
+
+  const activePower = Number(msg.capacitor.active_power);
+  const apparentPower = Number(msg.capacitor.apparent_power);
+
+  if (
+    Number.isFinite(activePower) &&
+    Number.isFinite(apparentPower)
+  ) {
+    this.essActivePowerBuffer.push(activePower);
+    this.essApparentPowerBuffer.push(apparentPower);
+  }
+}
+
+if (updated) {
+  const now = Date.now();
+
+  if (now - this.lastSaveTime >= 60000) {   // Every minute
+    await this.saveAllBufferedReadings();
+    this.lastSaveTime = now;
+  }
+
+  this.broadcastGensetData();
+}
 
           // === FAULT ALERTS (unchanged) ===
           else if (msg.fault) {
@@ -136,10 +163,12 @@ export class GensetGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
+  
+
   private broadcastGensetData() {
     const fullData = this.currentGensetData;
 
-  console.log("Broadcasting:", fullData);
+  // console.log("Broadcasting:", fullData);
     this.server.clients.forEach((client) => {
       const info = this.clientViews.get(client);
       if (!info?.view || client.readyState !== WebSocket.OPEN) return;
@@ -151,6 +180,49 @@ export class GensetGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
     });
   }
+
+
+ private async saveAllBufferedReadings() {
+  for (let i = 1; i <= 8; i++) {
+    if (this.kwBuffers[i]?.length > 0) {
+      const randomIndex = Math.floor(Math.random() * this.kwBuffers[i].length);
+
+      const randomKw = this.kwBuffers[i][randomIndex];
+      const randomKva = this.kvaBuffers[i][randomIndex];
+      const randomVoltage = this.voltageBuffers[i][randomIndex];
+
+      await this.gensetService.saveReading(i, randomKw, randomKva, randomVoltage);
+
+      // Clear all buffers
+      this.kwBuffers[i] = [];
+      this.kvaBuffers[i] = [];
+      this.voltageBuffers[i] = [];
+    }
+  }
+
+  if (
+  this.essActivePowerBuffer.length > 0 &&
+  this.essApparentPowerBuffer.length > 0
+) {
+  const randomIndex = Math.floor(
+    Math.random() * this.essActivePowerBuffer.length
+  );
+
+  const activePower =
+    this.essActivePowerBuffer[randomIndex];
+
+  const apparentPower =
+    this.essApparentPowerBuffer[randomIndex];
+
+  await this.gensetService.saveEssReading(
+    activePower,
+    apparentPower,
+  );
+
+  this.essActivePowerBuffer = [];
+  this.essApparentPowerBuffer = [];
+}
+}
 
   @OnEvent('toggle.genset')
   handleToggleEvent(payload: { genset: string; status: boolean }) {

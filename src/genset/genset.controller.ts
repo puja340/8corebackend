@@ -3,7 +3,8 @@ import { Controller, Post, Get, Body, Param, Query } from '@nestjs/common';
 import { GensetService } from './genset.service';
 import pool from 'src/lib/db';
 
-@Controller('api/genset')
+// @Controller('api/genset')
+@Controller('genset')
 export class GensetController {
   constructor(private readonly gensetService: GensetService) {}
 
@@ -65,6 +66,33 @@ export class GensetController {
     return this.gensetService.getGraphData(gensetId, range);
   }
 
+
+  @Get('ess-graph')
+async getEssGraphData() {
+  return this.gensetService.getEssGraphData();
+}
+
+@Get('power-graph/:gensetId')
+async getPowerGraph(
+  @Param('gensetId') gensetId: string,
+) {
+  const id = parseInt(gensetId, 10);
+
+  if (isNaN(id)) {
+    return {
+      success: false,
+      message: 'Invalid gensetId',
+    };
+  }
+
+  const data =
+    await this.gensetService.getGensetGraphData(id);
+
+  return {
+    success: true,
+    data,
+  };
+}
   // home page graph
   @Get('hourly-average')
   async getHourlyAverage(

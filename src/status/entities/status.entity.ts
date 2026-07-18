@@ -35,6 +35,9 @@ export class Status {
   @Column({ type: "timestamptz", nullable: true })
   genset1LastTurnedOff: Date;
 
+  @Column({ type: "boolean", default: false })
+gensetall: boolean;
+
   @Column({ type: "timestamptz", nullable: true })
   genset2LastTurnedOff: Date;
 

@@ -117,20 +117,65 @@ export class GensetService {
     return result.rows;
   }
 
-  async saveKwReading(gensetId: number, kwValue: number) {
-    try {
-      const result = await pool.query(`
-        INSERT INTO kw_readings (genset_id, kw_value, reading_time)
-        VALUES ($1, $2, NOW())
-        RETURNING id
-      `, [gensetId, kwValue]);
+async saveReading(gensetId: number, kwValue: number, kvaValue: number, voltageValue: number) {
+  try {
+    const result = await pool.query(`
+      INSERT INTO kw_readings 
+        (genset_id, kw_value, kva_value, voltage_value, reading_time)
+      VALUES ($1, $2, $3, $4, NOW())
+      RETURNING id
+    `, [gensetId, kwValue, kvaValue, voltageValue]);
 
-      console.log(`Saved KW reading for genset${gensetId}: ${kwValue}`);
-      return result.rows[0];
-    } catch (err) {
-      console.error('Failed to save KW reading:', err);
-    }
+    console.log(`Saved reading for genset${gensetId} → KW: ${kwValue}, KVA: ${kvaValue}, Voltage: ${voltageValue}`);
+    return result.rows[0];
+  } catch (err) {
+    console.error('Failed to save reading:', err);
   }
+}
+
+async getGensetGraphData(gensetId: number) {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        FLOOR(
+          EXTRACT(
+            HOUR FROM reading_time
+          ) / 2
+        ) * 2 AS bucket_hour,
+
+        AVG(voltage_value) AS avg_voltage,
+        AVG(kva_value) AS avg_kva,
+        AVG(kw_value) AS avg_kw
+
+      FROM kw_readings
+
+      WHERE genset_id = $1
+
+        -- Strictly today's records only
+        AND reading_time >= CURRENT_DATE
+        AND reading_time < CURRENT_DATE + INTERVAL '1 day'
+
+        -- Only records from 6:00 AM onward
+        AND reading_time >= CURRENT_DATE + INTERVAL '6 hours'
+
+      GROUP BY bucket_hour
+      ORDER BY bucket_hour ASC;
+      `,
+      [gensetId],
+    );
+
+    return result.rows.map((row) => ({
+      bucketHour: Number(row.bucket_hour),
+      voltage: Number(Number(row.avg_voltage).toFixed(2)),
+      kva: Number(Number(row.avg_kva).toFixed(2)),
+      kw: Number(Number(row.avg_kw).toFixed(2)),
+    }));
+  } catch (error) {
+    console.error('Failed to fetch power graph data:', error);
+    return [];
+  }
+}
 
   async getGraphData(gensetId: number, range: 'today' | '10days') {
     let timeFilter = '';
@@ -246,4 +291,85 @@ export class GensetService {
       return [];
     }
   }
+
+  // new update code
+ async updateGensetAllStatus(status: boolean) {
+  if (typeof status !== 'boolean') {
+    throw new BadRequestException('Invalid status');
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      UPDATE status
+      SET gensetall = $1
+      WHERE id = 1
+      RETURNING gensetall;
+      `,
+      [status],
+    );
+
+    return result.rows[0];
+  } catch (error) {
+    console.error('Failed to update gensetall status:', error);
+    throw new BadRequestException('Internal server error');
+  }
+}
+
+async getEssGraphData() {
+  try {
+    const result = await pool.query(`
+      SELECT
+        date_trunc('hour', created_at)
+        + FLOOR(EXTRACT(MINUTE FROM created_at) / 5)
+        * INTERVAL '5 minutes' AS time,
+
+        AVG(active_power) AS active_power,
+        AVG(apparent_power) AS apparent_power
+
+      FROM ess_graph
+
+      WHERE created_at >= NOW() - INTERVAL '1 hour'
+        AND created_at <= NOW()
+
+      GROUP BY time
+      ORDER BY time ASC
+    `);
+
+    return result.rows.map((row) => ({
+      timestamp: row.time,
+      activePower: Number(row.active_power).toFixed(2),
+      apparentPower: Number(row.apparent_power).toFixed(2),
+    }));
+  } catch (error) {
+    console.error('Failed to fetch ESS graph data:', error);
+    return [];
+  }
+}
+
+async saveEssReading(
+  activePower: number,
+  apparentPower: number,
+) {
+  try {
+    const result = await pool.query(
+      `
+      INSERT INTO ess_graph (
+        active_power,
+        apparent_power,
+        created_at
+      )
+      VALUES ($1, $2, NOW())
+      RETURNING *;
+      `,
+      [activePower, apparentPower],
+    );
+
+    console.log('ESS reading saved:', result.rows[0]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Failed to save ESS reading:', error);
+    return null;
+  }
+}
 }

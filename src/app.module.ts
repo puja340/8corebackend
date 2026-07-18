@@ -7,6 +7,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { GensetModule } from "./genset/genset.module";
 import { PowerModule } from "./avg_power/power.module";
+import { ReportModule } from "./reports/report.module";
 // import { GensetGateway } from "./gateways/genset.gateway";
 
 @Module({
@@ -32,6 +33,7 @@ import { PowerModule } from "./avg_power/power.module";
     StatusModule,
     GensetModule,
     PowerModule,
+    ReportModule,
   ],
   controllers: [AppController],
   providers: [AppService],
